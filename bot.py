@@ -100,6 +100,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS force_channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_username TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS agency_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
             bot_token TEXT NOT NULL, status TEXT DEFAULT 'pending',
@@ -305,6 +311,94 @@ OFFLINE_MSG = (
 )
 
 def is_offline_for(uid): return not BOT_ONLINE and uid != ADMIN_ID
+
+# ───────── عضو اجباری ─────────
+
+def get_force_channels():
+
+    with get_db() as conn:
+
+        rows = conn.execute(
+            "SELECT channel_username FROM force_channels"
+        ).fetchall()
+
+    return [r["channel_username"] for r in rows]
+
+
+def add_force_channel(channel):
+
+    with get_db() as conn:
+
+        conn.execute(
+            "INSERT INTO force_channels(channel_username) VALUES(?)",
+            (channel,)
+        )
+
+        conn.commit()
+
+
+def remove_force_channel(channel):
+
+    with get_db() as conn:
+
+        conn.execute(
+            "DELETE FROM force_channels WHERE channel_username=?",
+            (channel,)
+        )
+
+        conn.commit()
+
+
+def is_joined(user_id):
+
+    try:
+
+        channels = get_force_channels()
+
+        if not channels:
+            return True
+
+        for channel in channels:
+
+            member = bot.get_chat_member(channel, user_id)
+
+            if member.status not in [
+                "member",
+                "administrator",
+                "creator"
+            ]:
+                return False
+
+        return True
+
+    except Exception as e:
+        print("JOIN ERROR:", e)
+        return False
+
+
+def join_required_markup():
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+
+    channels = get_force_channels()
+
+    for channel in channels:
+
+        kb.add(
+            types.InlineKeyboardButton(
+                f"📢 {channel}",
+                url=f"https://t.me/{channel.replace('@','')}"
+            )
+        )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "✅ عضو شدم",
+            callback_data="check_join"
+        )
+    )
+
+    return kb
     def is_joined(user_id):
 
     try:
@@ -398,6 +492,14 @@ def send_main_menu(chat_id, user_id, text=None, delete_msg_id=None):
 def cmd_start(msg):
     if is_offline_for(msg.from_user.id):
         return bot.send_message(msg.chat.id, OFFLINE_MSG)
+
+    if not is_joined(msg.from_user.id):
+
+        return bot.send_message(
+            msg.chat.id,
+            "⚠️ برای استفاده از ربات ابتدا در کانال‌های زیر عضو شوید.",
+            reply_markup=join_required_markup()
+        )
     args = msg.text.split()
     referred_by = None
     if len(args) > 1 and args[1].startswith("ref_"):
@@ -431,6 +533,37 @@ def cmd_start(msg):
 # ─────────────────────────────────────────────
 #  MENU CALLBACKS
 # ─────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data == "check_join")
+def cb_check_join(call):
+
+    if is_joined(call.from_user.id):
+
+        bot.answer_callback_query(
+            call.id,
+            "✅ عضویت تایید شد"
+        )
+
+        safe_delete(
+            call.message.chat.id,
+            call.message.message_id
+        )
+
+        send_main_menu(
+            call.message.chat.id,
+            call.from_user.id,
+            "🎉 خوش آمدید"
+        )
+
+    else:
+
+        bot.answer_callback_query(
+            call.id,
+            "❌ هنوز عضو همه کانال‌ها نشدید",
+            show_alert=True
+        )
+
+
 @bot.callback_query_handler(func=lambda c: c.data == "menu_shop")
 def cb_menu_shop(call):
     if is_offline_for(call.from_user.id): return bot.answer_callback_query(call.id, "⚠️ ربات خاموش است.", show_alert=True)
@@ -1613,6 +1746,7 @@ def _show_admin_panel(chat_id):
         types.InlineKeyboardButton("📊 آمار کلی",         callback_data="ap_stats"),
         types.InlineKeyboardButton("📋 رسیدهای معلق",    callback_data="ap_pending"),
         types.InlineKeyboardButton("🤝 درخواست‌های نمایندگی", callback_data="ap_agency"),
+        types.InlineKeyboardButton("📢 عضو اجباری",       callback_data="admin_force_join"),
         types.InlineKeyboardButton("⚙️ تنظیمات",          callback_data="ap_settings"),
     )
     bot.send_message(chat_id,
@@ -1621,6 +1755,86 @@ def _show_admin_panel(chat_id):
         "👇 گزینه مورد نظر را انتخاب کنید:",
         reply_markup=kb
     )
+
+@bot.callback_query_handler(func=lambda c: c.data == "admin_force_join")
+def cb_admin_force_join(call):
+
+    if call.from_user.id != ADMIN_ID:
+        return
+
+    channels = get_force_channels()
+
+    text = "📢 <b>مدیریت عضو اجباری</b>\n\n"
+
+    if channels:
+
+        for ch in channels:
+            text += f"• {ch}\n"
+
+    else:
+
+        text += "❌ هیچ کانالی ثبت نشده\n"
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "➕ افزودن کانال",
+            callback_data="add_force_channel"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "➖ حذف کانال",
+            callback_data="remove_force_channel"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "🔙 بازگشت",
+            callback_data="menu_admin"
+        )
+    )
+
+    bot.edit_message_text(
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "add_force_channel")
+def cb_add_force_channel(call):
+
+    if call.from_user.id != ADMIN_ID:
+        return
+
+    set_state(call.from_user.id, action="add_force_channel")
+
+    bot.send_message(
+        call.message.chat.id,
+        "📢 یوزرنیم کانال را ارسال کنید\n\nمثال:\n@ViraNet"
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "remove_force_channel")
+def cb_remove_force_channel(call):
+
+    if call.from_user.id != ADMIN_ID:
+        return
+
+    set_state(call.from_user.id, action="remove_force_channel")
+
+    bot.send_message(
+        call.message.chat.id,
+        "➖ یوزرنیم کانال را ارسال کنید"
+    )
+
+
 
 @bot.callback_query_handler(func=lambda c: c.data == "ap_agency" and c.from_user.id == ADMIN_ID)
 def cb_ap_agency(call):
@@ -2002,6 +2216,37 @@ def cb_ap_pending(call):
 @bot.message_handler(content_types=["text"], func=lambda m: True)
 def fallback(msg):
     if is_offline_for(msg.from_user.id): return bot.send_message(msg.chat.id, OFFLINE_MSG)
+
+    state = get_state(msg.from_user.id)
+
+    if msg.from_user.id == ADMIN_ID:
+
+        if state.get("action") == "add_force_channel":
+
+            channel = msg.text.strip()
+
+            add_force_channel(channel)
+
+            clear_state(msg.from_user.id)
+
+            return bot.send_message(
+                msg.chat.id,
+                "✅ کانال اضافه شد"
+            )
+
+        if state.get("action") == "remove_force_channel":
+
+            channel = msg.text.strip()
+
+            remove_force_channel(channel)
+
+            clear_state(msg.from_user.id)
+
+            return bot.send_message(
+                msg.chat.id,
+                "✅ کانال حذف شد"
+            )
+
     u = get_user(msg.from_user.id)
     if u and u["is_banned"]: return
     if get_state(msg.from_user.id).get("step"): return
