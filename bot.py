@@ -32,6 +32,11 @@ WEBAPP_URL     = os.environ.get("WEBAPP_URL", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 
+FORCE_CHANNELS = os.environ.get(
+    "FORCE_CHANNELS",
+    "@ViraNet"
+).split(",")
+
 SUPPORT_USERNAME = "ViraNet0"
 REFERRAL_BONUS   = 5000
 AGENCY_MIN_WALLET = 1  # حداقل ۱ تومان برای درخواست نمایندگی
@@ -300,6 +305,47 @@ OFFLINE_MSG = (
 )
 
 def is_offline_for(uid): return not BOT_ONLINE and uid != ADMIN_ID
+    def is_joined(user_id):
+
+    try:
+
+        for channel in FORCE_CHANNELS:
+
+            member = bot.get_chat_member(channel.strip(), user_id)
+
+            if member.status not in ["member", "administrator", "creator"]:
+                return False
+
+        return True
+
+    except Exception as e:
+        print("Join check error:", e)
+        return False
+
+
+def join_required_markup():
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+
+    for channel in FORCE_CHANNELS:
+
+        channel = channel.strip()
+
+        kb.add(
+            types.InlineKeyboardButton(
+                f"📢 {channel}",
+                url=f"https://t.me/{channel.replace('@','')}"
+            )
+        )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "✅ عضو شدم",
+            callback_data="check_join"
+        )
+    )
+
+    return kb
 
 # ── Main Menu ──────────────────────────────────
 def main_menu_kb(user_id):
